@@ -1,0 +1,105 @@
+cmake_minimum_required(VERSION 3.16)
+project(mecanum_drive_controller LANGUAGES CXX)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# find dependencies
+set(THIS_PACKAGE_INCLUDE_DEPENDS
+  controller_interface
+  hardware_interface
+  generate_parameter_library
+  nav_msgs
+  pluginlib
+  rclcpp
+  rclcpp_lifecycle
+  realtime_tools
+  std_srvs
+  tf2
+  tf2_geometry_msgs
+  tf2_msgs
+)
+
+find_package(ament_cmake REQUIRED)
+find_package(backward_ros REQUIRED)
+foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
+  find_package(${Dependency} REQUIRED)
+endforeach()
+add_compile_definitions(RCPPUTILS_VERSION_MAJOR=${rcpputils_VERSION_MAJOR})
+add_compile_definitions(RCPPUTILS_VERSION_MINOR=${rcpputils_VERSION_MINOR})
+
+
+# create parameter header file
+generate_parameter_library(mecanum_drive_controller_parameters
+  src/mecanum_drive_controller.yaml
+)
+
+add_library(mecanum_drive_controller SHARED src/mecanum_drive_controller.cpp)
+target_compile_features(mecanum_drive_controller PUBLIC cxx_std_17)
+target_include_directories(mecanum_drive_controller PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>)
+target_link_libraries(mecanum_drive_controller PUBLIC
+  mecanum_drive_controller_parameters)
+ament_target_dependencies(mecanum_drive_controller PUBLIC ${THIS_PACKAGE_INCLUDE_DEPENDS})
+
+# Causes the visibility macros to use dllexport rather than dllimport,
+# which is appropriate when building the dll but not consuming it.
+target_compile_definitions(mecanum_drive_controller PRIVATE "MECANUM_DRIVE_CONTROLLER_BUILDING_LIBRARY")
+
+pluginlib_export_plugin_description_file(
+  controller_interface mecanum_drive_controller.xml)
+
+install(
+  DIRECTORY include/
+  DESTINATION include/${PROJECT_NAME}
+)
+install(
+  TARGETS mecanum_drive_controller mecanum_drive_controller_parameters
+  EXPORT export_${PROJECT_NAME}
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gmock REQUIRED)
+  find_package(controller_manager REQUIRED)
+  find_package(ros2_control_test_assets REQUIRED)
+  
+  add_rostest_with_parameters_gmock(test_load_mecanum_drive_controller
+    test/test_load_mecanum_drive_controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/mecanum_drive_controller_params.yaml
+  )
+  ament_target_dependencies(test_load_mecanum_drive_controller
+    controller_manager
+    ros2_control_test_assets
+  )
+
+  add_rostest_with_parameters_gmock(
+    test_mecanum_drive_controller_preceeding test/test_mecanum_drive_controller_preceeding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/mecanum_drive_controller_preceeding_params.yaml)
+  target_include_directories(test_mecanum_drive_controller_preceeding PRIVATE include)
+  target_link_libraries(test_mecanum_drive_controller_preceeding mecanum_drive_controller)
+  ament_target_dependencies(
+    test_mecanum_drive_controller_preceeding
+    controller_interface
+    hardware_interface
+  )
+
+  add_rostest_with_parameters_gmock(
+    test_mecanum_drive_controller test/test_mecanum_drive_controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/mecanum_drive_controller_params.yaml)
+  target_include_directories(test_mecanum_drive_controller PRIVATE include)
+  target_link_libraries(test_mecanum_drive_controller mecanum_drive_controller)
+  ament_target_dependencies(
+    test_mecanum_drive_controller
+    controller_interface
+    hardware_interface
+  )
+endif()
+
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
+ament_package()
