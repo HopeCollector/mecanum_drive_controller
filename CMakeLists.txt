@@ -35,7 +35,7 @@ generate_parameter_library(mecanum_drive_controller_parameters
   src/mecanum_drive_controller.yaml
 )
 
-add_library(mecanum_drive_controller SHARED src/mecanum_drive_controller.cpp)
+add_library(mecanum_drive_controller SHARED src/mecanum_drive_controller.cpp src/odometry.cpp)
 target_compile_features(mecanum_drive_controller PUBLIC cxx_std_17)
 target_include_directories(mecanum_drive_controller PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

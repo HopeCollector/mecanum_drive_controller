@@ -4,6 +4,7 @@
 #include "control_msgs/msg/mecanum_drive_controller_state.hpp"
 #include "controller_interface/chainable_controller_interface.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "mecanum_drive_controller/odometry.hpp"
 #include "mecanum_drive_controller/visibility_control.h"
 #include "nav_msgs/msg/odometry.hpp"
 #include "realtime_tools/realtime_buffer.h"
@@ -111,6 +112,10 @@ protected:
       input_ref_;
   rclcpp::Duration ref_timeout_ = rclcpp::Duration::from_seconds(0.0);
 
+  using OdomStatePublisher = realtime_tools::RealtimePublisher<OdomStateMsg>;
+  rclcpp::Publisher<OdomStateMsg>::SharedPtr odom_s_publisher_;
+  std::unique_ptr<OdomStatePublisher> rt_odom_state_publisher_;
+
   // controller state publisher
   using ControllerStatePublisher =
       realtime_tools::RealtimePublisher<ControllerStateMsg>;
@@ -122,6 +127,8 @@ protected:
   on_export_reference_interfaces() override;
 
   bool on_set_chained_mode(bool chained_mode) override;
+
+  Odometry odometry_;
 
 private:
   // callback for topic interface

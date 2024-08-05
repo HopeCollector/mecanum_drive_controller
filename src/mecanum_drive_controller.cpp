@@ -1,7 +1,8 @@
 #include "mecanum_drive_controller/mecanum_drive_controller.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
-#include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Matrix3x3.h"
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace { // utility
 
@@ -116,6 +117,11 @@ controller_interface::CallbackReturn MecanumDriveController::on_configure(
                                  params_.rear_left_wheel_command_joint_name,
                                  params_.rear_left_wheel_state_joint_name);
 
+  // Set wheel params for the odometry computation
+  odometry_.setWheelsParams(
+      params_.kinematics.sum_of_robot_center_projection_on_X_Y_axis,
+      params_.kinematics.wheels_radius);
+
   // topics QoS
   auto subscribers_qos = rclcpp::SystemDefaultsQoS();
   subscribers_qos.keep_last(1);
@@ -133,6 +139,35 @@ controller_interface::CallbackReturn MecanumDriveController::on_configure(
       std::make_shared<ControllerReferenceMsg>();
   reset_controller_reference_msg(msg, get_node());
   input_ref_.writeFromNonRT(msg);
+
+  try {
+    // Odom state publisher
+    odom_s_publisher_ = get_node()->create_publisher<OdomStateMsg>(
+        "~/odometry", rclcpp::SystemDefaultsQoS());
+    rt_odom_state_publisher_ =
+        std::make_unique<OdomStatePublisher>(odom_s_publisher_);
+  } catch (const std::exception &e) {
+    fprintf(stderr,
+            "Exception thrown during publisher creation at configure stage "
+            "with message : %s \n",
+            e.what());
+    return controller_interface::CallbackReturn::ERROR;
+  }
+
+  rt_odom_state_publisher_->lock();
+  rt_odom_state_publisher_->msg_.header.stamp = get_node()->now();
+  rt_odom_state_publisher_->msg_.header.frame_id = params_.odom_frame_id;
+  rt_odom_state_publisher_->msg_.child_frame_id = params_.base_frame_id;
+  rt_odom_state_publisher_->msg_.pose.pose.position.z = 0;
+
+  auto &covariance = rt_odom_state_publisher_->msg_.twist.covariance;
+  constexpr size_t NUM_DIMENSIONS = 6;
+  for (size_t index = 0; index < 6; ++index) {
+    const size_t diagonal_index = NUM_DIMENSIONS * index + index;
+    covariance[diagonal_index] = params_.pose_covariance_diagonal[index];
+    covariance[diagonal_index] = params_.twist_covariance_diagonal[index];
+  }
+  rt_odom_state_publisher_->unlock();
 
   try {
     // controller State publisher
@@ -214,6 +249,26 @@ MecanumDriveController::update_reference_from_subscribers(
 controller_interface::return_type
 MecanumDriveController::update_and_write_commands(
     const rclcpp::Time &time, const rclcpp::Duration &period) {
+  // FORWARD KINEMATICS (odometry).
+  const double wheel_front_left_state_vel =
+      state_interfaces_[FRONT_LEFT].get_value();
+  const double wheel_front_right_state_vel =
+      state_interfaces_[FRONT_RIGHT].get_value();
+  const double wheel_rear_right_state_vel =
+      state_interfaces_[REAR_RIGHT].get_value();
+  const double wheel_rear_left_state_vel =
+      state_interfaces_[REAR_LEFT].get_value();
+
+  if (!std::isnan(wheel_front_left_state_vel) &&
+      !std::isnan(wheel_rear_left_state_vel) &&
+      !std::isnan(wheel_rear_right_state_vel) &&
+      !std::isnan(wheel_front_right_state_vel)) {
+    // Estimate twist (using joint information) and integrate
+    odometry_.update(wheel_front_left_state_vel, wheel_rear_left_state_vel,
+                     wheel_rear_right_state_vel, wheel_front_right_state_vel,
+                     period.seconds());
+  }
+
   // INVERSE KINEMATICS (move robot).
   // Compute wheels velocities (this is the actual ik):
   // NOTE: the input desired twist (from topic `~/reference`) is a body twist.
@@ -280,6 +335,24 @@ MecanumDriveController::update_and_write_commands(
     command_interfaces_[FRONT_RIGHT].set_value(0.0);
     command_interfaces_[REAR_RIGHT].set_value(0.0);
     command_interfaces_[REAR_LEFT].set_value(0.0);
+  }
+
+  // Publish odometry message
+  // Compute and store orientation info
+  tf2::Quaternion orientation;
+  orientation.setRPY(0.0, 0.0, odometry_.getRz());
+
+  // Populate odom message and publish
+  if (rt_odom_state_publisher_->trylock()) {
+    rt_odom_state_publisher_->msg_.header.stamp = time;
+    rt_odom_state_publisher_->msg_.pose.pose.position.x = odometry_.getX();
+    rt_odom_state_publisher_->msg_.pose.pose.position.y = odometry_.getY();
+    rt_odom_state_publisher_->msg_.pose.pose.orientation =
+        tf2::toMsg(orientation);
+    rt_odom_state_publisher_->msg_.twist.twist.linear.x = odometry_.getVx();
+    rt_odom_state_publisher_->msg_.twist.twist.linear.y = odometry_.getVy();
+    rt_odom_state_publisher_->msg_.twist.twist.angular.z = odometry_.getWz();
+    rt_odom_state_publisher_->unlockAndPublish();
   }
 
   if (controller_state_publisher_->trylock()) {
